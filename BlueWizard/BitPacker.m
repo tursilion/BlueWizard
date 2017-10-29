@@ -7,10 +7,16 @@
 #import "CodingTable.h"
 #import "BitHelpers.h"
 #import "FrameData.h"
+#import "HexFormatter.h"
 
 static NSString * const kFrameDataParametersMethodName = @"parameters";
+static NSString * const kByteStreamDelimiter = @",";
 
 @implementation BitPacker
+
++(NSString *)delimiter {
+    return kByteStreamDelimiter;
+}
 
 +(NSString *)pack:(NSArray *)frameData {
     NSArray *parametersList = [frameData valueForKey:kFrameDataParametersMethodName];
@@ -18,12 +24,13 @@ static NSString * const kFrameDataParametersMethodName = @"parameters";
     NSArray *hex      = [HexConverter process:binary];
     NSArray *reversed = [NibbleBitReverser process:hex];
     NSArray *switched = [NibbleSwitcher process:reversed];
-    
-    return [switched componentsJoinedByString:@","];
+    NSArray *output   = [HexFormatter process:switched];
+
+    return [output componentsJoinedByString:kByteStreamDelimiter];
 }
 
 +(NSArray *)unpack:(NSString *)packedData {
-    NSArray *bytes    = [packedData componentsSeparatedByString:@","];
+    NSArray *bytes    = [packedData componentsSeparatedByString:kByteStreamDelimiter];
     NSArray *switched = [NibbleSwitcher process:bytes];
     NSArray *reversed = [NibbleBitReverser process:switched];
     NSString *binary  = [[HexByteBinaryEncoder process:reversed] componentsJoinedByString:@""];
@@ -37,7 +44,7 @@ static NSString * const kFrameDataParametersMethodName = @"parameters";
     __block NSString *binaryString = binary;
     while (binaryString) {
         NSMutableArray *frameKeys = [NSMutableArray arrayWithCapacity:kParameterKeys];
-        FrameData *frame = [[FrameData alloc] init];
+        FrameData *frame = [FrameData frameForDecoding];
         [[CodingTable parameters] enumerateObjectsUsingBlock:^(NSString *parameter, NSUInteger idx, BOOL *stop) {
             NSUInteger parameterBits = bits[idx];
             NSUInteger length        = [binaryString length];

@@ -5,6 +5,7 @@
 #import "CodingTable.h"
 #import "FrameData.h"
 #import "LargeWaveformViewController.h"
+#import "AppDelegate.h"
 
 static NSString * const kFrameDataTableViewIdentifier = @"parameter";
 static NSString * const kFrameDataTableViewFrameKey = @"frame";
@@ -72,22 +73,40 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 
 -(void)updateProcessedWaveformView:(NSNotification *)notification {
     self.processedWaveformView.buffer = notification.object;
-    self.startSample.stringValue = [[[self userSettings] startSample] stringValue];
-    self.endSample.stringValue = [[[self userSettings] endSample] stringValue];
+    NSNumber *startSample = [[self userSettings] startSample];
+    NSNumber *endSample   = [[self userSettings] endSample];
+    if (!startSample || !endSample) return;
+    self.startSample.stringValue = [startSample stringValue];
+    self.endSample.stringValue   = [endSample stringValue];
 }
 
 -(void)updateByteStreamView:(NSNotification *)notification {
+    [self.byteStreamTextView setTextColor:[NSColor blueColor]];
+
     self.byteStreamTextView.string = notification.object;
 }
 
 -(void)frameDataGenerated:(NSNotification *)notification {
+    if (self.spinner.hidden) [self showSpinner];
     self.frameData = notification.object;
 }
 
 -(void)setFrameData:(NSArray *)frameData {
     _frameData = frameData;
-    if (self.spinner.hidden) [self showSpinner];
     [self.frameDataTableView reloadData];
+}
+
+-(BOOL)hasInput {
+    AppDelegate *appDelegate = (AppDelegate *)[[NSApplication sharedApplication] delegate];
+    return [appDelegate hasInput];
+}
+
+-(NSNumber *)limitedForRMSInput:(NSTextField *)textField {
+    NSNumber *wrappedValue = [self numberFromString:[textField stringValue]];
+    NSInteger value = [wrappedValue integerValue];
+    if (value < 0) return @0;
+    if (value > 14) return @14;
+    return wrappedValue;
 }
 
 # pragma mark - Actions
@@ -97,7 +116,7 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 }
 
 -(IBAction)playOriginalWasClicked:(id)sender {
-    [[NSNotificationCenter defaultCenter] postNotificationName:playOriginalWasClicked object:self.playheadView];
+    [[NSNotificationCenter defaultCenter] postNotificationName:playOriginalWasClicked object:@[self.inputPlayheadView, self.OutputPlayheadView]];
 }
 
 -(IBAction)stopProcessedWasClicked:(id)sender {
@@ -105,7 +124,7 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 }
 
 -(IBAction)playProcessedWasClicked:(id)sender {
-    [[NSNotificationCenter defaultCenter] postNotificationName:playProcessedWasClicked object:self.playheadView];
+    [[NSNotificationCenter defaultCenter] postNotificationName:playProcessedWasClicked object:@[self.inputPlayheadView, self.OutputPlayheadView]];
 }
 
 -(IBAction)minFrequencyChanged:(NSTextField *)sender {
@@ -162,12 +181,16 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 }
 
 - (IBAction)rmsLimitChanged:(NSTextField *)sender {
-    [[self userSettings] setRmsLimit:[self numberFromString:[sender stringValue]]];
+    NSNumber *limit = [self limitedForRMSInput:sender];
+    [[self userSettings] setRmsLimit:limit];
+    sender.stringValue = [limit stringValue];
     [self notifySettingsChanged];
 }
 
 - (IBAction)unvoicedRMSLimitChanged:(NSTextField *)sender {
-    [[self userSettings] setUnvoicedRMSLimit:[self numberFromString:[sender stringValue]]];
+    NSNumber *limit = [self limitedForRMSInput:sender];
+    [[self userSettings] setUnvoicedRMSLimit:limit];
+    sender.stringValue = [limit stringValue];
     [self notifySettingsChanged];
 }
 
@@ -210,6 +233,18 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 - (IBAction)skipLeadingSilenceToggled:(id)sender {
     BOOL state = [sender state];
     [[self userSettings] setSkipLeadingSilence:state];
+    [self notifySettingsChanged];
+}
+
+- (IBAction)includeHexPrefixToggled:(id)sender {
+    BOOL state = [sender state];
+    [[self userSettings] setIncludeHexPrefix:state];
+    [self notifySettingsChanged];
+}
+
+- (IBAction)includeExplicitStopFrameToggled:(id)sender {
+    BOOL state = [sender state];
+    [[self userSettings] setIncludeExplicitStopFrame:state];
     [self notifySettingsChanged];
 }
 
@@ -256,7 +291,7 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 }
 
 -(void)notifySettingsChanged {
-    if (self.frameData) [self showSpinner];
+    if (self.frameData && [self hasInput]) [self showSpinner];
     [[NSNotificationCenter defaultCenter] postNotificationName:settingsChanged object:nil];
 }
 
@@ -273,6 +308,7 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 }
 
 -(IBAction)translateParametersToggled:(NSButton *)sender {
+    if (self.spinner.hidden) [self showSpinnerWithClearByteStream:NO];
     self.frameData = self.frameData;
 }
 
@@ -291,8 +327,13 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
 }
 
 -(void)showSpinner {
+    [self showSpinnerWithClearByteStream:YES];
+}
+
+-(void)showSpinnerWithClearByteStream:(BOOL)clearByteStream {
     self.spinner.hidden = NO;
     [self.spinner startAnimation:self];
+    if (clearByteStream) self.byteStreamTextView.string = @"";
 }
 
 -(void)hideSpinner {
@@ -319,7 +360,7 @@ static NSString * const kFrameDataTableViewFrameKey = @"frame";
         result.identifier  = kFrameDataTableViewIdentifier;
         result.target = self;
         result.action = @selector(didEditTableViewCell:);
-        result.objectValue = @"foo";
+        result.objectValue = @"";
     }
 
     FrameData *frameData = [self.frameData objectAtIndex:row];

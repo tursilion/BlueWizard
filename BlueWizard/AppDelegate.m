@@ -13,6 +13,13 @@
 #import "Filterer.h"
 #import "UserSettings.h"
 #import "TimeMachine.h"
+#import "HexConverter.h"
+
+static NSString * const kExtensionBIN = @"bin";
+static NSString * const kExtensionLPC = @"lpc";
+static NSString * const kExtensionTXT = @"txt";
+static NSString * const kExtensionAIF = @"aif";
+static NSString * const kExtensionWAV = @"wav";
 
 @interface AppDelegate ()
 
@@ -22,6 +29,8 @@
 @property (nonatomic, strong) Processor *processor;
 @property (nonatomic, strong) Buffer *buffer;
 @property (nonatomic, strong) Buffer *bufferWIthEQ;
+@property (nonatomic, strong) NSString *byteStream;
+@property (nonatomic, strong) NSSavePanel *save;
 
 @end
 
@@ -35,7 +44,7 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(stopWasClicked:) name:stopProcessedWasClicked object:nil];
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(bufferGenerated:) name:bufferGenerated object:nil];
-
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(byteStreamGenerated:) name:byteStreamGenerated object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(byteStreamChanged:) name:byteStreamChanged object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(settingsChanged:) name:settingsChanged object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(processInputWithEQ:) name:speedChanged object:nil];
@@ -47,6 +56,7 @@
 
 -(void)applicationWillTerminate:(NSNotification *)aNotification {
     [self.sampler stop];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 -(Sampler *)sampler {
@@ -56,20 +66,104 @@
     return _sampler;
 }
 
+-(BOOL)hasInput {
+    return !!self.input;
+}
+
 # pragma mark - MenuItems
 
-- (IBAction)MenuFileOpenWasChosen:(id)sender {
+-(IBAction)menuFileOpenAudioWasChosen:(id)sender {
     NSOpenPanel* dialog = [NSOpenPanel openPanel];
     [dialog setCanChooseFiles:YES];
     [dialog setCanChooseDirectories:YES];
+    [dialog setAllowedFileTypes:@[kExtensionAIF, kExtensionWAV]];
     
     if ([dialog runModal] == NSModalResponseOK) {
-        for (NSURL* URL in [dialog URLs]) {
+        for (NSURL *URL in [dialog URLs]) {
             self.input = [[Input alloc] initWithURL:URL];
             [self processInputWithEQ:nil];
             [self processInputSignal];
         }
     }
+}
+
+-(IBAction)menuFileOpenLPCWasChosen:(id)sender {
+    NSOpenPanel* dialog = [NSOpenPanel openPanel];
+    [dialog setCanChooseFiles:YES];
+    [dialog setCanChooseDirectories:YES];
+    [dialog setAllowedFileTypes:@[kExtensionLPC, kExtensionBIN, kExtensionTXT]];
+    if ([dialog runModal] == NSModalResponseOK) {
+        for (NSURL *URL in [dialog URLs]) {
+            NSData *data = [NSData dataWithContentsOfURL:URL];
+            NSString *byteStream = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            if (!byteStream) byteStream = [HexConverter stringFromData:data];
+            [self processFromByteStream:byteStream];
+        }
+    }
+}
+
+-(IBAction)menuFileSaveAudioWasChosen:(id)sender {
+    NSSavePanel *dialog = [NSSavePanel savePanel];
+    [dialog setExtensionHidden:NO];
+    [dialog setAllowsOtherFileTypes:NO];
+    [dialog setAllowedFileTypes:@[kExtensionAIF]];
+
+    if ([dialog runModal] == NSModalResponseOK) {
+        [Output createAIFFileFrom:self.buffer URL:[dialog URL]];
+    }
+}
+
+-(IBAction)menuFileSaveLPCWasChosen:(id)sender {
+    NSSavePanel *dialog = [NSSavePanel savePanel];
+    self.save = dialog;
+
+    [dialog setExtensionHidden:NO];
+    [dialog setAllowsOtherFileTypes:NO];
+    [dialog setAllowedFileTypes:@[kExtensionLPC, kExtensionBIN]];
+
+    NSArray *buttonItems   = @[@"Text (*.lpc)", @"Binary (*.bin)"];
+    NSView  *accessoryView = [[NSView alloc] initWithFrame:NSMakeRect(0.0, 0.0, 200, 32.0)];
+    NSTextField *label = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 60, 22)];
+    [label setEditable:NO];
+    [label setStringValue:@"Format:"];
+    [label setBordered:NO];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    
+    NSPopUpButton *popupButton = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(50.0, 2, 140, 22.0) pullsDown:NO];
+    [popupButton addItemsWithTitles:buttonItems];
+    [popupButton setAction:@selector(selectFormat:)];
+    [popupButton setTarget:self];
+    [accessoryView addSubview:label];
+    [accessoryView addSubview:popupButton];
+
+    [dialog setAccessoryView:accessoryView];
+    if ([dialog runModal] == NSModalResponseOK) {
+        NSURL *url = [dialog URL];
+        NSError *error;
+
+        if ([[[url pathExtension] lowercaseString] isEqualToString:kExtensionBIN]) {
+            NSString *withoutDelimiter = [[self.byteStream componentsSeparatedByString:[BitPacker delimiter]] componentsJoinedByString:@""];
+            NSData *byteStreamData = [HexConverter dataFromString:withoutDelimiter];
+            [byteStreamData writeToURL:url options:NSDataWritingAtomic error:&error];
+        } else {
+            [self.byteStream writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:&error];
+        }
+
+        if (error) NSLog(@"%@", [error description]);
+    }
+}
+
+-(void)selectFormat:(id)sender {
+    NSPopUpButton *button            = (NSPopUpButton *)sender;
+    NSInteger selectedItemIndex      = [button indexOfSelectedItem];
+    NSString *nameFieldString        = [self.save nameFieldStringValue];
+    NSString *trimmedNameFieldString = [nameFieldString stringByDeletingPathExtension];
+    NSString *extension = selectedItemIndex ? kExtensionBIN : kExtensionLPC;
+
+    NSString *nameFieldStringWithExt = [NSString stringWithFormat:@"%@.%@", trimmedNameFieldString, extension];
+    [self.save setNameFieldStringValue:nameFieldStringWithExt];
+    [self.save setAllowedFileTypes:@[extension]];
 }
 
 -(void)processInputWithEQ:(NSNotification *)notification {
@@ -90,10 +184,18 @@
 }
 
 -(void)playOriginalWasClicked:(NSNotification *)notification {
+    NSArray *playheads = notification.object;
+    [[playheads firstObject] setSampler:self.sampler];
+    [[playheads lastObject] setSampler:nil];
+
     [self.sampler stream:self.bufferWIthEQ];
 }
 
 -(void)playProcessedWasClicked:(NSNotification *)notification {
+    NSArray *playheads = notification.object;
+    [[playheads firstObject] setSampler:nil];
+    [[playheads lastObject] setSampler:self.sampler];
+
     [self.sampler stream:self.buffer];
 }
 
@@ -103,8 +205,15 @@
 }
 
 -(void)byteStreamChanged:(NSNotification *)notification {
-    NSArray *frames = [BitPacker unpack:notification.object];
+    [self processFromByteStream:notification.object];
+}
+
+-(void)processFromByteStream:(NSString *)byteStream {
+    self.byteStream = byteStream;
+    NSArray *frames = [BitPacker unpack:byteStream];
     [self postNotificationForFrames:frames];
+    self.input = nil;
+    [[NSNotificationCenter defaultCenter] postNotificationName:inputSignalReceived object:nil];
 }
 
 -(void)frameWasEdited:(NSNotification *)notification {
@@ -134,6 +243,10 @@
 
 -(void)bufferGenerated:(NSNotification *)notification {
     self.buffer = (Buffer *)notification.object;
+}
+
+-(void)byteStreamGenerated:(NSNotification *)notification {
+    self.byteStream = (NSString *)notification.object;
 }
 
 # pragma mark - SamplerDelegate

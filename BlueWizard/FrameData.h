@@ -5,6 +5,8 @@
 
 @property (nonatomic, getter=shouldSkip) BOOL skip;
 
++(FrameData *)stopFrame;
++(FrameData *)frameForDecoding;
 -(instancetype)initWithReflector:(Reflector *)reflector
                            pitch:(NSUInteger)pitch
                           repeat:(BOOL)repeat;
